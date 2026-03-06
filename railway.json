@@ -6,8 +6,6 @@
   "deploy": {
     "startCommand": "node .mastra/output/index.mjs",
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 3,
-    "healthcheckPath": "/api/health",
-    "healthcheckTimeout": 30
+    "restartPolicyMaxRetries": 3
   }
 }
