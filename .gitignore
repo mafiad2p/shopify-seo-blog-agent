@@ -1,0 +1,19 @@
+node_modules
+dist
+.mastra
+.env
+.env.development
+.env.local
+*.db
+*.db-*
+.DS_Store
+
+# Replit specific
+.replit
+.replit_integration_files
+.cache
+.local/
+.upm/
+attached_assets/
+.config/inngest/
+v3.txt
