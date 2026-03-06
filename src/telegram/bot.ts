@@ -174,21 +174,28 @@ export async function startTelegramBot(logger?: any) {
   logger?.info("🤖 [TelegramBot] Khởi động Telegram bot polling...");
 
   let offset = 0;
+  let backoffMs = 1000;
+  const MAX_BACKOFF = 60000;
 
-  const poll = async () => {
+  const poll = async (): Promise<boolean> => {
     try {
       const res = await fetch(
         `https://api.telegram.org/bot${botToken}/getUpdates?offset=${offset}&timeout=20&allowed_updates=["message"]`,
         { signal: AbortSignal.timeout(25000) }
       );
 
+      if (res.status === 409) {
+        logger?.warn(`⚠️ [TelegramBot] Conflict 409 — có instance khác đang chạy. Chờ ${backoffMs / 1000}s...`);
+        return false;
+      }
+
       if (!res.ok) {
-        logger?.warn(`⚠️ [TelegramBot] getUpdates lỗi ${res.status}`);
-        return;
+        logger?.warn(`⚠️ [TelegramBot] getUpdates lỗi HTTP ${res.status}`);
+        return false;
       }
 
       const data = await res.json() as any;
-      if (!data.ok || !data.result?.length) return;
+      if (!data.ok || !data.result?.length) return true;
 
       for (const update of data.result) {
         offset = update.update_id + 1;
@@ -199,7 +206,6 @@ export async function startTelegramBot(logger?: any) {
         const fromId = msg.chat.id;
         const text: string = msg.text;
 
-        // Chỉ cho phép chat ID đã cấu hình (nếu có)
         if (chatId && String(fromId) !== String(chatId)) {
           logger?.warn(`⚠️ [TelegramBot] Tin từ chat_id lạ: ${fromId}, bỏ qua.`);
           continue;
@@ -210,18 +216,26 @@ export async function startTelegramBot(logger?: any) {
           await handleCommand(botToken, fromId, text, logger);
         }
       }
+      return true;
     } catch (err: any) {
       if (!err?.message?.includes("abort")) {
         logger?.warn(`⚠️ [TelegramBot] Polling lỗi: ${err?.message}`);
       }
+      return false;
     }
   };
 
-  // Chạy polling liên tục
+  // Chạy polling liên tục với exponential backoff khi lỗi
   const loop = async () => {
     while (true) {
-      await poll();
-      await new Promise((r) => setTimeout(r, 1000));
+      const success = await poll();
+      if (success) {
+        backoffMs = 1000;
+        await new Promise((r) => setTimeout(r, 1000));
+      } else {
+        await new Promise((r) => setTimeout(r, backoffMs));
+        backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
+      }
     }
   };
 
