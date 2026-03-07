@@ -173,9 +173,15 @@ export async function startTelegramBot(logger?: any) {
 
   logger?.info("🤖 [TelegramBot] Khởi động Telegram bot polling...");
 
+  // Xóa session cũ trước khi bắt đầu
+  try {
+    await fetch(`https://api.telegram.org/bot${botToken}/getUpdates?offset=-1&limit=1&timeout=0`);
+    logger?.info("🔄 [TelegramBot] Đã reset session cũ");
+  } catch {}
+
   let offset = 0;
   let backoffMs = 1000;
-  const MAX_BACKOFF = 60000;
+  const MAX_BACKOFF = 30000;
 
   const poll = async (): Promise<boolean> => {
     try {
@@ -185,7 +191,11 @@ export async function startTelegramBot(logger?: any) {
       );
 
       if (res.status === 409) {
-        logger?.warn(`⚠️ [TelegramBot] Conflict 409 — có instance khác đang chạy. Chờ ${backoffMs / 1000}s...`);
+        logger?.warn(`⚠️ [TelegramBot] Conflict 409 — chờ ${backoffMs / 1000}s rồi thử reset...`);
+        // Thử force-reset connection bằng getUpdates với timeout=0
+        try {
+          await fetch(`https://api.telegram.org/bot${botToken}/getUpdates?offset=-1&limit=1&timeout=0`);
+        } catch {}
         return false;
       }
 
