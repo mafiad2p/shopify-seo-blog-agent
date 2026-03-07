@@ -12,7 +12,7 @@ import { inngest, inngestServe } from "./inngest";
 import { registerCronTrigger } from "../triggers/cronTriggers";
 import { automationWorkflow } from "./workflows/workflow";
 import { seoAgent } from "./agents/agent";
-import { startTelegramBot } from "../telegram/bot";
+import { registerWebhook, handleWebhookUpdate } from "../telegram/bot";
 
 // Chạy hàng ngày lúc 9:00 AM UTC (tương đương 16:00 giờ Việt Nam)
 registerCronTrigger({
@@ -109,6 +109,24 @@ export const mastra = new Mastra({
         method: "ALL",
         createHandler: async ({ mastra }) => inngestServe({ mastra, inngest }),
       },
+      {
+        path: "/api/telegram-webhook",
+        method: "POST",
+        createHandler: async ({ mastra }) => {
+          const logger = mastra?.getLogger();
+          return async (c: any) => {
+            try {
+              const update = await c.req.json();
+              logger?.info(`📩 [Webhook] Nhận update: ${JSON.stringify(update).slice(0, 200)}`);
+              await handleWebhookUpdate(update, logger);
+              return c.json({ ok: true });
+            } catch (err) {
+              logger?.error(`❌ [Webhook] Lỗi xử lý: ${err}`);
+              return c.json({ ok: false }, 500);
+            }
+          };
+        },
+      },
     ],
   },
   logger:
@@ -135,4 +153,4 @@ if (Object.keys(mastra.listAgents()).length > 1) {
   );
 }
 
-startTelegramBot(mastra.getLogger());
+registerWebhook(mastra.getLogger());
