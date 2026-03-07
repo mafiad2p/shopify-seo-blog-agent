@@ -12,8 +12,8 @@ async function shopifyGet(path: string) {
   return res.json();
 }
 
-async function sendTelegram(botToken: string, chatId: string | number, text: string) {
-  await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+export async function sendTelegram(botToken: string, chatId: string | number, text: string) {
+  const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -23,6 +23,7 @@ async function sendTelegram(botToken: string, chatId: string | number, text: str
       disable_web_page_preview: true,
     }),
   });
+  return res.json();
 }
 
 async function buildReport(): Promise<string> {
@@ -48,7 +49,6 @@ async function buildReport(): Promise<string> {
 
   const todayArticles = byDate[today] || [];
 
-  // Lấy 3 ngày gần nhất
   const sortedDates = Object.keys(byDate).sort((a, b) => {
     const parse = (s: string) => {
       const [d, m, y] = s.split("/").map(Number);
@@ -85,7 +85,7 @@ ${recentLines ? `📝 *Bài viết gần đây:*${recentLines}` : ""}
 _Cron chạy tự động lúc 9:00 SA (VN)_`;
 }
 
-async function handleCommand(
+export async function handleCommand(
   botToken: string,
   chatId: string | number,
   text: string,
@@ -151,9 +151,7 @@ async function handleCommand(
     }
   } else if (cmd === "/total") {
     try {
-      const data = await shopifyGet(
-        `/blogs/${BLOG_ID}/articles/count.json`
-      );
+      const data = await shopifyGet(`/blogs/${BLOG_ID}/articles/count.json`);
       const count = data.count ?? "?";
       await sendTelegram(botToken, chatId, `📚 Blog *GPS Guides* hiện có *${count} bài viết* tổng cộng.`);
     } catch (err) {
@@ -162,93 +160,73 @@ async function handleCommand(
   }
 }
 
-export async function startTelegramBot(logger?: any) {
+export async function handleWebhookUpdate(update: any, logger?: any) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
-  if (!botToken) {
-    logger?.warn("⚠️ [TelegramBot] TELEGRAM_BOT_TOKEN chưa cấu hình, bỏ qua bot polling.");
+  if (!botToken) return;
+
+  const msg = update.message;
+  if (!msg?.text) return;
+
+  const fromId = msg.chat.id;
+  const text: string = msg.text;
+
+  if (chatId && String(fromId) !== String(chatId)) {
+    logger?.warn(`⚠️ [Webhook] Tin từ chat_id lạ: ${fromId}, bỏ qua.`);
     return;
   }
 
-  logger?.info("🤖 [TelegramBot] Khởi động Telegram bot polling...");
+  if (text.startsWith("/")) {
+    logger?.info(`📩 [Webhook] Nhận lệnh "${text}" từ chat ${fromId}`);
+    await handleCommand(botToken, fromId, text, logger);
+  }
+}
 
-  // Xóa session cũ trước khi bắt đầu
+export async function registerWebhook(logger?: any) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const appUrl = process.env.APP_URL || process.env.RAILWAY_PUBLIC_DOMAIN;
+
+  if (!botToken) {
+    logger?.warn("⚠️ [Webhook] TELEGRAM_BOT_TOKEN chưa cấu hình, bỏ qua.");
+    return;
+  }
+
+  if (!appUrl) {
+    logger?.warn("⚠️ [Webhook] APP_URL chưa cấu hình, bỏ qua đăng ký webhook.");
+    return;
+  }
+
+  const baseUrl = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
+  const webhookUrl = `${baseUrl}/api/telegram-webhook`;
+
   try {
-    await fetch(`https://api.telegram.org/bot${botToken}/getUpdates?offset=-1&limit=1&timeout=0`);
-    logger?.info("🔄 [TelegramBot] Đã reset session cũ");
-  } catch {}
+    const checkRes = await fetch(`https://api.telegram.org/bot${botToken}/getWebhookInfo`);
+    const checkData = await checkRes.json() as any;
+    const currentUrl = checkData.result?.url;
 
-  let offset = 0;
-  let backoffMs = 1000;
-  const MAX_BACKOFF = 30000;
-
-  const poll = async (): Promise<boolean> => {
-    try {
-      const res = await fetch(
-        `https://api.telegram.org/bot${botToken}/getUpdates?offset=${offset}&timeout=20&allowed_updates=["message"]`,
-        { signal: AbortSignal.timeout(25000) }
-      );
-
-      if (res.status === 409) {
-        logger?.warn(`⚠️ [TelegramBot] Conflict 409 — chờ ${backoffMs / 1000}s rồi thử reset...`);
-        // Thử force-reset connection bằng getUpdates với timeout=0
-        try {
-          await fetch(`https://api.telegram.org/bot${botToken}/getUpdates?offset=-1&limit=1&timeout=0`);
-        } catch {}
-        return false;
-      }
-
-      if (!res.ok) {
-        logger?.warn(`⚠️ [TelegramBot] getUpdates lỗi HTTP ${res.status}`);
-        return false;
-      }
-
-      const data = await res.json() as any;
-      if (!data.ok || !data.result?.length) return true;
-
-      for (const update of data.result) {
-        offset = update.update_id + 1;
-
-        const msg = update.message;
-        if (!msg?.text) continue;
-
-        const fromId = msg.chat.id;
-        const text: string = msg.text;
-
-        if (chatId && String(fromId) !== String(chatId)) {
-          logger?.warn(`⚠️ [TelegramBot] Tin từ chat_id lạ: ${fromId}, bỏ qua.`);
-          continue;
-        }
-
-        if (text.startsWith("/")) {
-          logger?.info(`📩 [TelegramBot] Nhận lệnh "${text}" từ chat ${fromId}`);
-          await handleCommand(botToken, fromId, text, logger);
-        }
-      }
-      return true;
-    } catch (err: any) {
-      if (!err?.message?.includes("abort")) {
-        logger?.warn(`⚠️ [TelegramBot] Polling lỗi: ${err?.message}`);
-      }
-      return false;
+    if (currentUrl === webhookUrl) {
+      logger?.info(`✅ [Webhook] Telegram webhook đã đăng ký: ${webhookUrl}`);
+      return;
     }
-  };
 
-  // Chạy polling liên tục với exponential backoff khi lỗi
-  const loop = async () => {
-    while (true) {
-      const success = await poll();
-      if (success) {
-        backoffMs = 1000;
-        await new Promise((r) => setTimeout(r, 1000));
-      } else {
-        await new Promise((r) => setTimeout(r, backoffMs));
-        backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
-      }
+    logger?.info(`🔗 [Webhook] Đăng ký Telegram webhook: ${webhookUrl}`);
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: webhookUrl,
+        allowed_updates: ["message"],
+        drop_pending_updates: true,
+      }),
+    });
+    const data = await res.json() as any;
+    if (data.ok) {
+      logger?.info(`✅ [Webhook] Đăng ký thành công! URL: ${webhookUrl}`);
+    } else {
+      logger?.error(`❌ [Webhook] Đăng ký thất bại: ${JSON.stringify(data)}`);
     }
-  };
-
-  loop().catch((err) => logger?.error(`❌ [TelegramBot] Loop lỗi: ${err}`));
-  logger?.info("✅ [TelegramBot] Bot đang lắng nghe lệnh. Gõ /report trong Telegram để thử.");
+  } catch (err) {
+    logger?.error(`❌ [Webhook] Lỗi đăng ký: ${err}`);
+  }
 }
